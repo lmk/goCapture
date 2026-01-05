@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image"
 	"image/png"
@@ -64,14 +65,36 @@ type CaptureApp struct {
 	mu            sync.Mutex
 	keyboardHook  uintptr
 	overlay       *OverlayWindow
+	prefix        string
+	outputDir     string
 }
 
 func main() {
+	// Parse command-line flags
+	prefix := flag.String("prefix", "goCapture", "파일명 prefix (기본값: goCapture)")
+	outputDir := flag.String("dir", "./goCapture", "저장 경로 (기본값: ./goCapture)")
+	flag.Parse()
+
+	// Validate and create output directory if needed
+	absOutputDir, err := filepath.Abs(*outputDir)
+	if err != nil {
+		log.Fatalf("Invalid output directory: %v", err)
+	}
+
+	if err := os.MkdirAll(absOutputDir, 0755); err != nil {
+		log.Fatalf("Failed to create output directory: %v", err)
+	}
+
 	app := &CaptureApp{
-		counter: 1,
+		counter:   1,
+		prefix:    *prefix,
+		outputDir: absOutputDir,
 	}
 
 	fmt.Println("=== Windows Screen Capture Tool ===")
+	fmt.Printf("파일명 prefix: %s\n", app.prefix)
+	fmt.Printf("저장 경로: %s\n", app.outputDir)
+	fmt.Println()
 	fmt.Println("Instructions:")
 	fmt.Println("1. Press Ctrl + Drag mouse to select/update capture region")
 	fmt.Println("2. Press SPACE to capture screenshot")
@@ -107,12 +130,15 @@ func (app *CaptureApp) captureScreen() error {
 		return fmt.Errorf("failed to capture screenshot: %v", err)
 	}
 
-	// Generate filename
-	filename := fmt.Sprintf("capture_%03d.png", app.counter)
+	// Generate filename with prefix
+	filename := fmt.Sprintf("%s_%03d.png", app.prefix, app.counter)
 	app.counter++
 
+	// Create full path
+	fullPath := filepath.Join(app.outputDir, filename)
+
 	// Save to file
-	file, err := os.Create(filename)
+	file, err := os.Create(fullPath)
 	if err != nil {
 		return fmt.Errorf("failed to create file: %v", err)
 	}
@@ -122,8 +148,7 @@ func (app *CaptureApp) captureScreen() error {
 		return fmt.Errorf("failed to encode PNG: %v", err)
 	}
 
-	absPath, _ := filepath.Abs(filename)
-	fmt.Printf("Screenshot saved: %s\n", absPath)
+	fmt.Printf("Screenshot saved: %s\n", fullPath)
 	return nil
 }
 

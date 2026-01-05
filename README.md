@@ -32,10 +32,38 @@ Go 언어로 작성된 간단하고 효율적인 Windows 화면 캡처 도구입
 
 ## 사용 방법
 
+### 기본 사용
+
 1. 프로그램을 실행합니다:
    ```bash
    ./goCapture.exe
    ```
+
+### 커맨드 라인 옵션
+
+파일명 prefix와 저장 경로를 지정할 수 있습니다:
+
+```bash
+# 기본 실행 (파일명: goCapture_001.png, 경로: ./goCapture)
+./goCapture.exe
+
+# 파일명 prefix 지정
+./goCapture.exe -prefix screenshot
+
+# 저장 경로 지정
+./goCapture.exe -dir C:\Users\YourName\Pictures
+
+# 둘 다 지정
+./goCapture.exe -prefix myapp -dir ./screenshots
+```
+
+**옵션:**
+- `-prefix` : 파일명 prefix (기본값: `goCapture`)
+  - 파일은 `{prefix}_001.png`, `{prefix}_002.png` 형식으로 저장됩니다
+- `-dir` : 스크린샷 저장 경로 (기본값: `./goCapture`)
+  - 경로가 없으면 자동으로 생성됩니다
+
+### 캡처 실행
 
 2. 반투명 오버레이가 화면에 나타납니다:
    - `Ctrl` 키를 누른 상태로 마우스 왼쪽 버튼을 드래그하여 캡처할 영역을 선택합니다
@@ -48,10 +76,10 @@ Go 언어로 작성된 간단하고 효율적인 Windows 화면 캡처 도구입
    - 다른 모든 마우스 클릭과 키보드 입력은 백그라운드 애플리케이션으로 전달됩니다
    - 창 전환, 스크롤, 버튼 클릭 등 모든 작업이 정상적으로 동작합니다!
 
-4. 스크린샷은 현재 디렉토리에 다음과 같이 저장됩니다:
-   - `capture_001.png`
-   - `capture_002.png`
-   - `capture_003.png`
+4. 스크린샷은 지정한 디렉토리에 다음과 같이 저장됩니다:
+   - `{prefix}_001.png` (예: `goCapture_001.png`)
+   - `{prefix}_002.png` (예: `goCapture_002.png`)
+   - `{prefix}_003.png` (예: `goCapture_003.png`)
    - 등등...
 
 ## 사용 예시
