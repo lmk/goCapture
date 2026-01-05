@@ -31,42 +31,57 @@ var (
 	procInvalidateRect             = user32.NewProc("InvalidateRect")
 	procPostMessage                = user32.NewProc("PostMessageW")
 	procGetCursorPos               = user32.NewProc("GetCursorPos")
+	procRedrawWindow               = user32.NewProc("RedrawWindow")
 
-	procCreateSolidBrush = gdi32.NewProc("CreateSolidBrush")
-	procDeleteObject     = gdi32.NewProc("DeleteObject")
-	procRectangle        = gdi32.NewProc("Rectangle")
-	procCreatePen        = gdi32.NewProc("CreatePen")
-	procSelectObject     = gdi32.NewProc("SelectObject")
+	procCreateSolidBrush     = gdi32.NewProc("CreateSolidBrush")
+	procDeleteObject         = gdi32.NewProc("DeleteObject")
+	procRectangle            = gdi32.NewProc("Rectangle")
+	procCreatePen            = gdi32.NewProc("CreatePen")
+	procSelectObject         = gdi32.NewProc("SelectObject")
+	procPatBlt               = gdi32.NewProc("PatBlt")
+	procGetStockObject       = gdi32.NewProc("GetStockObject")
+	procCreateCompatibleDC   = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	procBitBlt               = gdi32.NewProc("BitBlt")
+	procDeleteDC             = gdi32.NewProc("DeleteDC")
 )
 
 const (
-	WS_EX_TOPMOST     = 0x00000008
-	WS_EX_LAYERED     = 0x00080000
-	WS_EX_TRANSPARENT = 0x00000020
-	WS_EX_TOOLWINDOW  = 0x00000080
-	WS_POPUP          = 0x80000000
-	WS_VISIBLE        = 0x10000000
-	SW_SHOW           = 5
-	WM_DESTROY        = 0x0002
-	WM_PAINT          = 0x000F
-	WM_LBUTTONDOWN    = 0x0201
-	WM_LBUTTONUP      = 0x0202
-	WM_MOUSEMOVE      = 0x0200
-	WM_CLOSE          = 0x0010
-	WM_USER           = 0x0400
-	WM_UPDATE_RECT    = WM_USER + 1
-	LWA_ALPHA         = 0x00000002
-	SM_CXSCREEN       = 0
-	SM_CYSCREEN       = 1
-	SM_XVIRTUALSCREEN = 76
-	SM_YVIRTUALSCREEN = 77
+	WS_EX_TOPMOST      = 0x00000008
+	WS_EX_LAYERED      = 0x00080000
+	WS_EX_TRANSPARENT  = 0x00000020
+	WS_EX_TOOLWINDOW   = 0x00000080
+	WS_POPUP           = 0x80000000
+	WS_VISIBLE         = 0x10000000
+	SW_SHOW            = 5
+	WM_DESTROY         = 0x0002
+	WM_PAINT           = 0x000F
+	WM_ERASEBKGND      = 0x0014
+	WM_LBUTTONDOWN     = 0x0201
+	WM_LBUTTONUP       = 0x0202
+	WM_MOUSEMOVE       = 0x0200
+	WM_CLOSE           = 0x0010
+	WM_USER            = 0x0400
+	WM_UPDATE_RECT     = WM_USER + 1
+	LWA_ALPHA          = 0x00000002
+	SM_CXSCREEN        = 0
+	SM_CYSCREEN        = 1
+	SM_XVIRTUALSCREEN  = 76
+	SM_YVIRTUALSCREEN  = 77
 	SM_CXVIRTUALSCREEN = 78
 	SM_CYVIRTUALSCREEN = 79
-	PS_SOLID          = 0
-	NULL_BRUSH        = 5
-	GWL_EXSTYLE       = -20
-	MK_CONTROL        = 0x0008
-	VK_LBUTTON        = 0x01
+	PS_SOLID           = 0
+	NULL_BRUSH         = 5
+	HOLLOW_BRUSH       = 5
+	GWL_EXSTYLE        = -20
+	MK_CONTROL         = 0x0008
+	VK_LBUTTON         = 0x01
+	BLACKNESS          = 0x00000042
+	WHITENESS          = 0x00FF0062
+	SRCCOPY            = 0x00CC0020
+	RDW_INVALIDATE     = 0x0001
+	RDW_ERASE          = 0x0004
+	RDW_ALLCHILDREN    = 0x0080
 )
 
 type WNDCLASSEX struct {
@@ -222,14 +237,17 @@ func (ow *OverlayWindow) installMouseHook() error {
 					ow.endX = ow.startX
 					ow.endY = ow.startY
 					ow.isDragging = true
-					procPostMessage.Call(ow.hwnd, WM_UPDATE_RECT, 0, 0)
+					procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
 				}
 
 			case WM_MOUSEMOVE:
 				if ow.isDragging && isCtrlPressed() {
-					ow.endX = mouseStruct.Pt.X
-					ow.endY = mouseStruct.Pt.Y
-					procPostMessage.Call(ow.hwnd, WM_UPDATE_RECT, 0, 0)
+					// Only update if position changed significantly (reduce redraws)
+					if abs(ow.endX-mouseStruct.Pt.X) > 5 || abs(ow.endY-mouseStruct.Pt.Y) > 5 {
+						ow.endX = mouseStruct.Pt.X
+						ow.endY = mouseStruct.Pt.Y
+						procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+					}
 				}
 
 			case WM_LBUTTONUP:
@@ -252,7 +270,7 @@ func (ow *OverlayWindow) installMouseHook() error {
 						ow.app.updateRegion(rect)
 					}
 
-					procPostMessage.Call(ow.hwnd, WM_UPDATE_RECT, 0, 0)
+					procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
 				}
 			}
 		}
@@ -285,22 +303,33 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	}
 
 	switch msg {
-	case WM_UPDATE_RECT:
-		procInvalidateRect.Call(hwnd, 0, 1)
-		return 0
+	case WM_ERASEBKGND:
+		// Return 1 to indicate we handled the erase (prevents flickering)
+		return 1
 
 	case WM_PAINT:
-		// Call BeginPaint/EndPaint to validate the window
-		var ps PAINTSTRUCT
-		hdc, _, _ := procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		// Get window DC
+		hdc, _, _ := procGetDC.Call(hwnd)
+
+		// Get window dimensions
+		var rect RECT
+		user32.NewProc("GetClientRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+
+		// Create off-screen DC for double buffering
+		memDC, _, _ := procCreateCompatibleDC.Call(hdc)
+		memBitmap, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(rect.Right), uintptr(rect.Bottom))
+		oldBitmap, _, _ := procSelectObject.Call(memDC, memBitmap)
+
+		// Clear the off-screen buffer with BLACKNESS (transparent on layered window)
+		procPatBlt.Call(memDC, 0, 0, uintptr(rect.Right), uintptr(rect.Bottom), BLACKNESS)
 
 		if !ow.lastRect.Empty() || ow.isDragging {
 			// Create a red pen for the rectangle border
 			pen, _, _ := procCreatePen.Call(PS_SOLID, 3, 0x0000FF) // Red color (BGR format)
-			oldPen, _, _ := procSelectObject.Call(hdc, pen)
+			oldPen, _, _ := procSelectObject.Call(memDC, pen)
 
 			// Select null brush (transparent fill)
-			oldBrush, _, _ := procSelectObject.Call(hdc, NULL_BRUSH)
+			oldBrush, _, _ := procSelectObject.Call(memDC, NULL_BRUSH)
 
 			// Draw the last selected rectangle
 			// Convert screen coordinates to window client coordinates
@@ -310,7 +339,7 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				clientMaxX := int32(ow.lastRect.Max.X) - ow.virtualX
 				clientMaxY := int32(ow.lastRect.Max.Y) - ow.virtualY
 
-				procRectangle.Call(hdc,
+				procRectangle.Call(memDC,
 					uintptr(clientMinX),
 					uintptr(clientMinY),
 					uintptr(clientMaxX),
@@ -325,16 +354,26 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 				minY := min(ow.startY, ow.endY) - ow.virtualY
 				maxY := max(ow.startY, ow.endY) - ow.virtualY
 
-				procRectangle.Call(hdc, uintptr(minX), uintptr(minY), uintptr(maxX), uintptr(maxY))
+				procRectangle.Call(memDC, uintptr(minX), uintptr(minY), uintptr(maxX), uintptr(maxY))
 			}
 
-			// Cleanup
-			procSelectObject.Call(hdc, oldPen)
-			procSelectObject.Call(hdc, oldBrush)
+			// Cleanup pen and brush
+			procSelectObject.Call(memDC, oldPen)
+			procSelectObject.Call(memDC, oldBrush)
 			procDeleteObject.Call(pen)
 		}
 
-		procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		// Copy the off-screen buffer to the screen in one operation (eliminates flickering)
+		procBitBlt.Call(hdc, 0, 0, uintptr(rect.Right), uintptr(rect.Bottom), memDC, 0, 0, SRCCOPY)
+
+		// Cleanup off-screen DC and bitmap
+		procSelectObject.Call(memDC, oldBitmap)
+		procDeleteObject.Call(memBitmap)
+		procDeleteDC.Call(memDC)
+
+		procReleaseDC.Call(hwnd, hdc)
+		// Validate the window to prevent further WM_PAINT messages
+		user32.NewProc("ValidateRect").Call(hwnd, 0)
 		return 0
 
 	case WM_CLOSE, WM_DESTROY:
@@ -372,4 +411,11 @@ func max(a, b int32) int32 {
 		return a
 	}
 	return b
+}
+
+func abs(a int32) int32 {
+	if a < 0 {
+		return -a
+	}
+	return a
 }
