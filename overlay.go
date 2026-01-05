@@ -58,6 +58,10 @@ const (
 	LWA_ALPHA         = 0x00000002
 	SM_CXSCREEN       = 0
 	SM_CYSCREEN       = 1
+	SM_XVIRTUALSCREEN = 76
+	SM_YVIRTUALSCREEN = 77
+	SM_CXVIRTUALSCREEN = 78
+	SM_CYVIRTUALSCREEN = 79
 	PS_SOLID          = 0
 	NULL_BRUSH        = 5
 	GWL_EXSTYLE       = -20
@@ -114,6 +118,8 @@ type OverlayWindow struct {
 	lastRect   image.Rectangle
 	app        *CaptureApp
 	mouseHook  uintptr
+	virtualX   int32
+	virtualY   int32
 }
 
 var globalOverlay *OverlayWindow
@@ -143,18 +149,24 @@ func (ow *OverlayWindow) Run() error {
 		return fmt.Errorf("failed to register window class")
 	}
 
-	// Get screen dimensions
-	screenWidth, _, _ := procGetSystemMetrics.Call(SM_CXSCREEN)
-	screenHeight, _, _ := procGetSystemMetrics.Call(SM_CYSCREEN)
+	// Get virtual screen dimensions (all monitors combined)
+	virtualX, _, _ := procGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
+	virtualY, _, _ := procGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
+	virtualWidth, _, _ := procGetSystemMetrics.Call(SM_CXVIRTUALSCREEN)
+	virtualHeight, _, _ := procGetSystemMetrics.Call(SM_CYVIRTUALSCREEN)
+
+	fmt.Printf("Virtual screen: X=%d, Y=%d, Width=%d, Height=%d\n",
+		int32(virtualX), int32(virtualY), virtualWidth, virtualHeight)
 
 	// Create the overlay window with WS_EX_TRANSPARENT to allow click-through by default
+	// Cover the entire virtual screen (all monitors)
 	hwnd, _, _ := procCreateWindowEx.Call(
 		WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_TRANSPARENT,
 		uintptr(unsafe.Pointer(className)),
 		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Select Region"))),
 		WS_POPUP|WS_VISIBLE,
-		0, 0,
-		screenWidth, screenHeight,
+		virtualX, virtualY,
+		virtualWidth, virtualHeight,
 		0, 0, 0, 0,
 	)
 
@@ -163,6 +175,8 @@ func (ow *OverlayWindow) Run() error {
 	}
 
 	ow.hwnd = hwnd
+	ow.virtualX = int32(virtualX)
+	ow.virtualY = int32(virtualY)
 
 	// Set window transparency (very transparent so barely visible)
 	procSetLayeredWindowAttributes.Call(hwnd, 0, 30, LWA_ALPHA)
@@ -289,20 +303,27 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			oldBrush, _, _ := procSelectObject.Call(hdc, NULL_BRUSH)
 
 			// Draw the last selected rectangle
+			// Convert screen coordinates to window client coordinates
 			if !ow.lastRect.Empty() {
+				clientMinX := int32(ow.lastRect.Min.X) - ow.virtualX
+				clientMinY := int32(ow.lastRect.Min.Y) - ow.virtualY
+				clientMaxX := int32(ow.lastRect.Max.X) - ow.virtualX
+				clientMaxY := int32(ow.lastRect.Max.Y) - ow.virtualY
+
 				procRectangle.Call(hdc,
-					uintptr(ow.lastRect.Min.X),
-					uintptr(ow.lastRect.Min.Y),
-					uintptr(ow.lastRect.Max.X),
-					uintptr(ow.lastRect.Max.Y))
+					uintptr(clientMinX),
+					uintptr(clientMinY),
+					uintptr(clientMaxX),
+					uintptr(clientMaxY))
 			}
 
 			// If currently dragging, draw the current selection
+			// Convert screen coordinates to window client coordinates
 			if ow.isDragging {
-				minX := min(ow.startX, ow.endX)
-				maxX := max(ow.startX, ow.endX)
-				minY := min(ow.startY, ow.endY)
-				maxY := max(ow.startY, ow.endY)
+				minX := min(ow.startX, ow.endX) - ow.virtualX
+				maxX := max(ow.startX, ow.endX) - ow.virtualX
+				minY := min(ow.startY, ow.endY) - ow.virtualY
+				maxY := max(ow.startY, ow.endY) - ow.virtualY
 
 				procRectangle.Call(hdc, uintptr(minX), uintptr(minY), uintptr(maxX), uintptr(maxY))
 			}
