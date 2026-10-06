@@ -10,8 +10,8 @@ import (
 )
 
 var (
-	shcore                         = windows.NewLazyDLL("shcore.dll")
-	procSetProcessDpiAwareness     = shcore.NewProc("SetProcessDpiAwareness")
+	shcore                     = windows.NewLazyDLL("shcore.dll")
+	procSetProcessDpiAwareness = shcore.NewProc("SetProcessDpiAwareness")
 
 	procCreateWindowEx             = user32.NewProc("CreateWindowExW")
 	procDefWindowProc              = user32.NewProc("DefWindowProcW")
@@ -33,17 +33,17 @@ var (
 	procGetCursorPos               = user32.NewProc("GetCursorPos")
 	procRedrawWindow               = user32.NewProc("RedrawWindow")
 
-	procCreateSolidBrush     = gdi32.NewProc("CreateSolidBrush")
-	procDeleteObject         = gdi32.NewProc("DeleteObject")
-	procRectangle            = gdi32.NewProc("Rectangle")
-	procCreatePen            = gdi32.NewProc("CreatePen")
-	procSelectObject         = gdi32.NewProc("SelectObject")
-	procPatBlt               = gdi32.NewProc("PatBlt")
-	procGetStockObject       = gdi32.NewProc("GetStockObject")
-	procCreateCompatibleDC   = gdi32.NewProc("CreateCompatibleDC")
+	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procRectangle              = gdi32.NewProc("Rectangle")
+	procCreatePen              = gdi32.NewProc("CreatePen")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procPatBlt                 = gdi32.NewProc("PatBlt")
+	procGetStockObject         = gdi32.NewProc("GetStockObject")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procBitBlt               = gdi32.NewProc("BitBlt")
-	procDeleteDC             = gdi32.NewProc("DeleteDC")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
 )
 
 const (
@@ -53,7 +53,9 @@ const (
 	WS_EX_TOOLWINDOW   = 0x00000080
 	WS_POPUP           = 0x80000000
 	WS_VISIBLE         = 0x10000000
+	SW_HIDE            = 0
 	SW_SHOW            = 5
+	SW_SHOWNA          = 8
 	WM_DESTROY         = 0x0002
 	WM_PAINT           = 0x000F
 	WM_ERASEBKGND      = 0x0014
@@ -397,6 +399,20 @@ func (ow *OverlayWindow) Close() {
 
 func (ow *OverlayWindow) SetApp(app *CaptureApp) {
 	ow.app = app
+}
+
+// SetVisible hides or shows the selection overlay.
+// PrintScreen captures layered windows, so the border is hidden during that capture.
+func (ow *OverlayWindow) SetVisible(visible bool) {
+	if ow == nil || ow.hwnd == 0 {
+		return
+	}
+	if visible {
+		procShowWindow.Call(ow.hwnd, SW_SHOWNA)
+		procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+		return
+	}
+	procShowWindow.Call(ow.hwnd, SW_HIDE)
 }
 
 func min(a, b int32) int32 {

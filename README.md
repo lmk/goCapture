@@ -55,6 +55,9 @@ Go 언어로 작성된 간단하고 효율적인 Windows 화면 캡처 도구입
 
 # 둘 다 지정
 ./goCapture.exe -prefix myapp -dir ./screenshots
+
+# PrintScreen 키 + 클립보드로 캡처
+./goCapture.exe -method prtsc
 ```
 
 **옵션:**
@@ -62,6 +65,9 @@ Go 언어로 작성된 간단하고 효율적인 Windows 화면 캡처 도구입
   - 파일은 `{prefix}_001.png`, `{prefix}_002.png` 형식으로 저장됩니다
 - `-dir` : 스크린샷 저장 경로 (기본값: `./goCapture`)
   - 경로가 없으면 자동으로 생성됩니다
+- `-method` : 캡처 방식 (기본값: `gdi`)
+  - `gdi` : 화면 DC를 직접 읽는 기본 방식 (Space 키)
+  - `prtsc` : Space 키로 캡처합니다. PrintScreen과 같이 클립보드 전체 화면을 받은 뒤 선택 영역만 저장합니다. Space로 안 되면 PrintScreen 키도 동일하게 동작합니다
 
 ### 캡처 실행
 
@@ -72,6 +78,7 @@ Go 언어로 작성된 간단하고 효율적인 Windows 화면 캡처 도구입
 
 3. 영역이 선택된 상태에서:
    - `SPACE` 키를 눌러 선택한 영역의 스크린샷을 캡처합니다
+   - `prtsc`에서는 Space로 안 되면 `PrintScreen` 키로도 동일하게 저장됩니다
    - `ESC` 키를 눌러 프로그램을 종료합니다
    - 다른 모든 마우스 클릭과 키보드 입력은 백그라운드 애플리케이션으로 전달됩니다
    - 창 전환, 스크롤, 버튼 클릭 등 모든 작업이 정상적으로 동작합니다!
@@ -94,7 +101,8 @@ Go 언어로 작성된 간단하고 효율적인 Windows 화면 캡처 도구입
 - Windows API를 사용한 키보드 훅 (저수준 키보드 훅)
 - Windows API 마우스 훅을 사용하여 Ctrl+드래그 감지
 - 클릭 통과 오버레이를 위한 `WS_EX_TRANSPARENT` 레이어드 윈도우 활용
-- 스크린샷 라이브러리: `github.com/kbinani/screenshot`
+- 기본 캡처는 `github.com/kbinani/screenshot` (GDI)
+- `-method prtsc`는 Space(또는 PrintScreen)로 클립보드에 들어온 전체 화면에서 선택 영역만 잘라 저장합니다. Space는 PrintScreen 입력을 보내며, 훅에서는 주입된 키를 중복 처리하지 않습니다
 - Space와 ESC를 제외한 모든 키와 마우스 이벤트는 시스템으로 전달되어 정상적인 상호작용 유지
 
 ## 소스에서 빌드하기
@@ -119,6 +127,8 @@ go build -o goCapture.exe
 **스크린샷이 검은색으로 나옴:**
 - 일부 애플리케이션은 하드웨어 오버레이를 사용하여 캡처할 수 없습니다
 - 전체 화면 대신 창 모드로 대상 애플리케이션을 실행해보세요
+- `-method prtsc`로 실행한 뒤 **Space**로 저장하세요
+- Space로 클립보드에 이미지가 안 들어오면 **PrintScreen** 키를 직접 누르세요
 
 **Ctrl+드래그가 작동하지 않음:**
 - 관리자 권한으로 프로그램을 실행해보세요
