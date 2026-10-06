@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"image"
+	"runtime"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
@@ -13,37 +15,28 @@ var (
 	shcore                     = windows.NewLazyDLL("shcore.dll")
 	procSetProcessDpiAwareness = shcore.NewProc("SetProcessDpiAwareness")
 
-	procCreateWindowEx             = user32.NewProc("CreateWindowExW")
-	procDefWindowProc              = user32.NewProc("DefWindowProcW")
-	procPostQuitMessage            = user32.NewProc("PostQuitMessage")
-	procRegisterClassEx            = user32.NewProc("RegisterClassExW")
-	procShowWindow                 = user32.NewProc("ShowWindow")
-	procUpdateWindow               = user32.NewProc("UpdateWindow")
-	procDestroyWindow              = user32.NewProc("DestroyWindow")
-	procGetDC                      = user32.NewProc("GetDC")
-	procReleaseDC                  = user32.NewProc("ReleaseDC")
-	procBeginPaint                 = user32.NewProc("BeginPaint")
-	procEndPaint                   = user32.NewProc("EndPaint")
-	procSetLayeredWindowAttributes = user32.NewProc("SetLayeredWindowAttributes")
-	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
-	procSetWindowLong              = user32.NewProc("SetWindowLongW")
-	procGetWindowLong              = user32.NewProc("GetWindowLongW")
-	procInvalidateRect             = user32.NewProc("InvalidateRect")
-	procPostMessage                = user32.NewProc("PostMessageW")
-	procGetCursorPos               = user32.NewProc("GetCursorPos")
-	procRedrawWindow               = user32.NewProc("RedrawWindow")
+	procCreateWindowEx      = user32.NewProc("CreateWindowExW")
+	procDefWindowProc       = user32.NewProc("DefWindowProcW")
+	procPostQuitMessage     = user32.NewProc("PostQuitMessage")
+	procRegisterClassEx     = user32.NewProc("RegisterClassExW")
+	procShowWindow          = user32.NewProc("ShowWindow")
+	procPostMessage         = user32.NewProc("PostMessageW")
+	procSetTimer            = user32.NewProc("SetTimer")
+	procKillTimer           = user32.NewProc("KillTimer")
+	procGetSystemMetrics    = user32.NewProc("GetSystemMetrics")
+	procGetDC               = user32.NewProc("GetDC")
+	procReleaseDC           = user32.NewProc("ReleaseDC")
+	procBeginPaint          = user32.NewProc("BeginPaint")
+	procEndPaint            = user32.NewProc("EndPaint")
+	procFillRect            = user32.NewProc("FillRect")
+	procUpdateLayeredWindow = user32.NewProc("UpdateLayeredWindow")
 
-	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
-	procDeleteObject           = gdi32.NewProc("DeleteObject")
-	procRectangle              = gdi32.NewProc("Rectangle")
-	procCreatePen              = gdi32.NewProc("CreatePen")
-	procSelectObject           = gdi32.NewProc("SelectObject")
-	procPatBlt                 = gdi32.NewProc("PatBlt")
-	procGetStockObject         = gdi32.NewProc("GetStockObject")
 	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
 	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
-	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
 	procDeleteDC               = gdi32.NewProc("DeleteDC")
+	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
 )
 
 const (
@@ -51,10 +44,9 @@ const (
 	WS_EX_LAYERED      = 0x00080000
 	WS_EX_TRANSPARENT  = 0x00000020
 	WS_EX_TOOLWINDOW   = 0x00000080
+	WS_EX_NOACTIVATE   = 0x08000000
 	WS_POPUP           = 0x80000000
-	WS_VISIBLE         = 0x10000000
 	SW_HIDE            = 0
-	SW_SHOW            = 5
 	SW_SHOWNA          = 8
 	WM_DESTROY         = 0x0002
 	WM_PAINT           = 0x000F
@@ -63,27 +55,21 @@ const (
 	WM_LBUTTONUP       = 0x0202
 	WM_MOUSEMOVE       = 0x0200
 	WM_CLOSE           = 0x0010
+	WM_TIMER           = 0x0113
 	WM_USER            = 0x0400
 	WM_UPDATE_RECT     = WM_USER + 1
-	LWA_ALPHA          = 0x00000002
 	SM_CXSCREEN        = 0
 	SM_CYSCREEN        = 1
 	SM_XVIRTUALSCREEN  = 76
 	SM_YVIRTUALSCREEN  = 77
 	SM_CXVIRTUALSCREEN = 78
 	SM_CYVIRTUALSCREEN = 79
-	PS_SOLID           = 0
-	NULL_BRUSH         = 5
-	HOLLOW_BRUSH       = 5
-	GWL_EXSTYLE        = -20
-	MK_CONTROL         = 0x0008
-	VK_LBUTTON         = 0x01
-	BLACKNESS          = 0x00000042
-	WHITENESS          = 0x00FF0062
-	SRCCOPY            = 0x00CC0020
-	RDW_INVALIDATE     = 0x0001
-	RDW_ERASE          = 0x0004
-	RDW_ALLCHILDREN    = 0x0080
+	AC_SRC_OVER        = 0
+	ULW_ALPHA          = 0x00000002
+	borderPx           = int32(4)
+	overlayTimerID     = 1
+	overlayTickMs      = 100
+	frameInterval      = uint32(16)
 )
 
 type WNDCLASSEX struct {
@@ -117,6 +103,18 @@ type PAINTSTRUCT struct {
 	RgbReserved [32]byte
 }
 
+type SIZE struct {
+	CX int32
+	CY int32
+}
+
+type BLENDFUNCTION struct {
+	BlendOp             byte
+	BlendFlags          byte
+	SourceConstantAlpha byte
+	AlphaFormat         byte
+}
+
 type MSLLHOOKSTRUCT struct {
 	Pt          POINT
 	MouseData   uint32
@@ -125,18 +123,41 @@ type MSLLHOOKSTRUCT struct {
 	DwExtraInfo uintptr
 }
 
+type barSurface struct {
+	dc, bmp, old uintptr
+	w, h         int32
+}
+
 type OverlayWindow struct {
 	hwnd       uintptr
-	startX     int32
-	startY     int32
-	endX       int32
-	endY       int32
-	isDragging bool
-	lastRect   image.Rectangle
+	bars       [4]uintptr
+	surf       [4]barSurface
+	barX       [4]int32
+	barY       [4]int32
+	barW       [4]int32
+	barH       [4]int32
+	barOn      [4]bool
 	app        *CaptureApp
 	mouseHook  uintptr
-	virtualX   int32
-	virtualY   int32
+	brush      uintptr
+	failLogged bool
+
+	// Hook writes these. The window thread reads them.
+	startX       int32
+	startY       int32
+	endX         int32
+	endY         int32
+	dragging     int32
+	dragCommit   int32
+	hidden       int32
+	paintPending int32
+	lastTick     int64
+
+	hasRect bool
+	winX    int32
+	winY    int32
+	winW    int32
+	winH    int32
 }
 
 var globalOverlay *OverlayWindow
@@ -148,16 +169,22 @@ func NewOverlayWindow() *OverlayWindow {
 }
 
 func (ow *OverlayWindow) Run() error {
-	// Set DPI awareness to get correct screen coordinates
+	// The low-level mouse hook is bound to this OS thread. If the goroutine
+	// migrates, Windows posts hook calls to a thread with no message loop and
+	// drops them after a timeout.
+	runtime.LockOSThread()
+
 	procSetProcessDpiAwareness.Call(2) // PROCESS_PER_MONITOR_DPI_AWARE
 
 	className := windows.StringToUTF16Ptr("OverlayWindowClass")
+	ow.brush, _, _ = procCreateSolidBrush.Call(0x0000FF) // red, COLORREF BGR
+	if ow.brush == 0 {
+		return fmt.Errorf("failed to create border brush")
+	}
 
 	wc := WNDCLASSEX{
 		CbSize:        uint32(unsafe.Sizeof(WNDCLASSEX{})),
 		LpfnWndProc:   syscall.NewCallback(wndProc),
-		HInstance:     0,
-		HbrBackground: 0,
 		LpszClassName: className,
 	}
 
@@ -166,129 +193,84 @@ func (ow *OverlayWindow) Run() error {
 		return fmt.Errorf("failed to register window class")
 	}
 
-	// Get virtual screen dimensions (all monitors combined)
-	virtualX, _, _ := procGetSystemMetrics.Call(SM_XVIRTUALSCREEN)
-	virtualY, _, _ := procGetSystemMetrics.Call(SM_YVIRTUALSCREEN)
-	virtualWidth, _, _ := procGetSystemMetrics.Call(SM_CXVIRTUALSCREEN)
-	virtualHeight, _, _ := procGetSystemMetrics.Call(SM_CYVIRTUALSCREEN)
-
-	fmt.Printf("Virtual screen: X=%d, Y=%d, Width=%d, Height=%d\n",
-		int32(virtualX), int32(virtualY), virtualWidth, virtualHeight)
-
-	// Create the overlay window with WS_EX_TRANSPARENT to allow click-through by default
-	// Cover the entire virtual screen (all monitors)
-	hwnd, _, _ := procCreateWindowEx.Call(
-		WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_TRANSPARENT,
-		uintptr(unsafe.Pointer(className)),
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Select Region"))),
-		WS_POPUP|WS_VISIBLE,
-		virtualX, virtualY,
-		virtualWidth, virtualHeight,
-		0, 0, 0, 0,
-	)
-
-	if hwnd == 0 {
-		return fmt.Errorf("failed to create window")
+	// Thin bars only. A fullscreen layered window is what made dragging stall.
+	for i := 0; i < 4; i++ {
+		hwnd, _, _ := procCreateWindowEx.Call(
+			WS_EX_TOPMOST|WS_EX_LAYERED|WS_EX_TOOLWINDOW|WS_EX_TRANSPARENT|WS_EX_NOACTIVATE,
+			uintptr(unsafe.Pointer(className)),
+			uintptr(unsafe.Pointer(windows.StringToUTF16Ptr("Select Region"))),
+			WS_POPUP,
+			0, 0, 1, 1,
+			0, 0, 0, 0,
+		)
+		if hwnd == 0 {
+			return fmt.Errorf("failed to create border window")
+		}
+		ow.bars[i] = hwnd
 	}
 
-	ow.hwnd = hwnd
-	ow.virtualX = int32(virtualX)
-	ow.virtualY = int32(virtualY)
+	ow.hwnd = ow.bars[0]
+	// Idle safety net for a missed button-up. During a drag this message is
+	// starved, so the hook posts WM_UPDATE_RECT itself.
+	procSetTimer.Call(ow.hwnd, overlayTimerID, overlayTickMs, 0)
 
-	// Set window transparency (very transparent so barely visible)
-	procSetLayeredWindowAttributes.Call(hwnd, 0, 30, LWA_ALPHA)
-
-	procShowWindow.Call(hwnd, SW_SHOW)
-	procUpdateWindow.Call(hwnd)
-
-	// Install mouse hook to detect Ctrl+Drag
 	if err := ow.installMouseHook(); err != nil {
 		return err
 	}
 
-	// Message loop
 	var msg MSG
 	for {
 		ret, _, _ := procGetMessage.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0, 0, 0,
 		)
-
 		if ret == 0 {
 			break
 		}
-
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
 		procDispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
 	}
-
 	return nil
 }
 
 func (ow *OverlayWindow) installMouseHook() error {
+	// Windows waits for this callback before delivering the next mouse event.
 	mouseCallback := func(nCode int, wParam uintptr, lParam uintptr) uintptr {
 		if nCode >= 0 && ow != nil {
-			mouseStruct := (*MSLLHOOKSTRUCT)(unsafe.Pointer(lParam))
 			block := false
-
-			switch wParam {
-			case WM_LBUTTONDOWN:
-				// Check if Ctrl is pressed
-				if isCtrlPressed() {
-					ow.startX = mouseStruct.Pt.X
-					ow.startY = mouseStruct.Pt.Y
-					ow.endX = ow.startX
-					ow.endY = ow.startY
-					ow.isDragging = true
-					procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+			if atomic.LoadInt32(&ow.dragging) != 0 {
+				switch wParam {
+				case WM_MOUSEMOVE:
+					// Swallowing this freezes the cursor. The click is already
+					// eaten, so the window below does not start a drag.
+					mouseStruct := (*MSLLHOOKSTRUCT)(unsafe.Pointer(lParam))
+					atomic.StoreInt32(&ow.endX, mouseStruct.Pt.X)
+					atomic.StoreInt32(&ow.endY, mouseStruct.Pt.Y)
+					ow.requestFrame(false, mouseStruct.Time)
+				case WM_LBUTTONUP:
+					mouseStruct := (*MSLLHOOKSTRUCT)(unsafe.Pointer(lParam))
+					atomic.StoreInt32(&ow.endX, mouseStruct.Pt.X)
+					atomic.StoreInt32(&ow.endY, mouseStruct.Pt.Y)
+					atomic.StoreInt32(&ow.dragging, 0)
+					atomic.StoreInt32(&ow.dragCommit, 1)
+					ow.requestFrame(true, mouseStruct.Time)
 					block = true
 				}
-
-			case WM_MOUSEMOVE:
-				if ow.isDragging {
-					block = true
-					if isCtrlPressed() {
-						// Only update if position changed significantly (reduce redraws)
-						if abs(ow.endX-mouseStruct.Pt.X) > 5 || abs(ow.endY-mouseStruct.Pt.Y) > 5 {
-							ow.endX = mouseStruct.Pt.X
-							ow.endY = mouseStruct.Pt.Y
-							procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
-						}
-					}
-				}
-
-			case WM_LBUTTONUP:
-				if ow.isDragging {
-					ow.endX = mouseStruct.Pt.X
-					ow.endY = mouseStruct.Pt.Y
-					ow.isDragging = false
-
-					// Calculate the selected rectangle
-					minX := min(ow.startX, ow.endX)
-					maxX := max(ow.startX, ow.endX)
-					minY := min(ow.startY, ow.endY)
-					maxY := max(ow.startY, ow.endY)
-
-					rect := image.Rect(int(minX), int(minY), int(maxX), int(maxY))
-					ow.lastRect = rect
-
-					// Update the capture region in the app
-					if ow.app != nil {
-						ow.app.updateRegion(rect)
-					}
-
-					procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
-					block = true
-				}
+			} else if wParam == WM_LBUTTONDOWN && isCtrlPressed() {
+				mouseStruct := (*MSLLHOOKSTRUCT)(unsafe.Pointer(lParam))
+				atomic.StoreInt32(&ow.startX, mouseStruct.Pt.X)
+				atomic.StoreInt32(&ow.startY, mouseStruct.Pt.Y)
+				atomic.StoreInt32(&ow.endX, mouseStruct.Pt.X)
+				atomic.StoreInt32(&ow.endY, mouseStruct.Pt.Y)
+				atomic.StoreInt32(&ow.dragging, 1)
+				ow.requestFrame(true, mouseStruct.Time)
+				block = true
 			}
-
 			if block {
-				// Swallow the event so the underlying app does not receive it.
 				return 1
 			}
 		}
 
-		// Pass to next hook
 		ret, _, _ := procCallNextHookEx.Call(0, uintptr(nCode), wParam, lParam)
 		return ret
 	}
@@ -299,13 +281,191 @@ func (ow *OverlayWindow) installMouseHook() error {
 		0,
 		0,
 	)
-
 	if hook == 0 {
 		return fmt.Errorf("failed to set mouse hook: %v", err)
 	}
-
 	ow.mouseHook = hook
 	return nil
+}
+
+// requestFrame posts one paint. WM_TIMER and WM_PAINT never run while mouse
+// hook messages keep the queue non-empty, so the hook has to ask directly.
+func (ow *OverlayWindow) requestFrame(force bool, tick uint32) {
+	if ow == nil || ow.hwnd == 0 {
+		return
+	}
+	if !force {
+		last := uint32(atomic.LoadInt64(&ow.lastTick))
+		if tick-last < frameInterval {
+			return
+		}
+	}
+	if !atomic.CompareAndSwapInt32(&ow.paintPending, 0, 1) {
+		return
+	}
+	atomic.StoreInt64(&ow.lastTick, int64(tick))
+	procPostMessage.Call(ow.hwnd, WM_UPDATE_RECT, 0, 0)
+}
+
+func (ow *OverlayWindow) paintNow() {
+	if atomic.LoadInt32(&ow.hidden) != 0 {
+		return
+	}
+
+	rect := screenRect(
+		atomic.LoadInt32(&ow.startX),
+		atomic.LoadInt32(&ow.startY),
+		atomic.LoadInt32(&ow.endX),
+		atomic.LoadInt32(&ow.endY),
+	)
+	if atomic.LoadInt32(&ow.dragging) != 0 {
+		ow.applyRect(rect)
+		return
+	}
+	if atomic.CompareAndSwapInt32(&ow.dragCommit, 1, 0) {
+		ow.applyRect(rect)
+		if ow.app != nil {
+			ow.app.updateRegion(rect)
+		}
+	}
+}
+
+func (ow *OverlayWindow) applyRect(r image.Rectangle) {
+	w := int32(r.Dx())
+	h := int32(r.Dy())
+	if w < 2 || h < 2 {
+		if ow.hasRect {
+			ow.hideBars(true)
+			ow.hasRect = false
+		}
+		return
+	}
+
+	x := int32(r.Min.X)
+	y := int32(r.Min.Y)
+	if ow.hasRect && x == ow.winX && y == ow.winY && w == ow.winW && h == ow.winH {
+		return
+	}
+
+	b := borderPx
+	if w <= b*2 || h <= b*2 {
+		ow.placeBar(0, x, y, w, h)
+		ow.placeBar(1, 0, 0, 0, 0)
+		ow.placeBar(2, 0, 0, 0, 0)
+		ow.placeBar(3, 0, 0, 0, 0)
+	} else {
+		ow.placeBar(0, x, y, w, b)
+		ow.placeBar(1, x, y+h-b, w, b)
+		ow.placeBar(2, x, y+b, b, h-2*b)
+		ow.placeBar(3, x+w-b, y+b, b, h-2*b)
+	}
+	ow.winX, ow.winY, ow.winW, ow.winH = x, y, w, h
+	ow.hasRect = true
+}
+
+func (ow *OverlayWindow) placeBar(i int, x, y, w, h int32) {
+	hwnd := ow.bars[i]
+	if hwnd == 0 {
+		return
+	}
+	if w < 1 || h < 1 {
+		if ow.barOn[i] {
+			procShowWindow.Call(hwnd, SW_HIDE)
+			ow.barOn[i] = false
+		}
+		return
+	}
+	if ow.barOn[i] && ow.barX[i] == x && ow.barY[i] == y && ow.barW[i] == w && ow.barH[i] == h {
+		return
+	}
+	if !ow.ensureSurface(i, w, h) {
+		return
+	}
+	if !ow.barOn[i] {
+		procShowWindow.Call(hwnd, SW_SHOWNA)
+	}
+	if !ow.presentBar(hwnd, ow.surf[i].dc, x, y, w, h) {
+		return
+	}
+	ow.barX[i], ow.barY[i], ow.barW[i], ow.barH[i] = x, y, w, h
+	ow.barOn[i] = true
+}
+
+func (ow *OverlayWindow) ensureSurface(i int, w, h int32) bool {
+	s := &ow.surf[i]
+	if s.dc != 0 && s.w == w && s.h == h {
+		return true
+	}
+	ow.releaseSurface(i)
+
+	screen, _, _ := procGetDC.Call(0)
+	if screen == 0 {
+		ow.logFail(fmt.Errorf("GetDC failed"))
+		return false
+	}
+	defer procReleaseDC.Call(0, screen)
+
+	s.dc, _, _ = procCreateCompatibleDC.Call(screen)
+	s.bmp, _, _ = procCreateCompatibleBitmap.Call(screen, uintptr(w), uintptr(h))
+	if s.dc == 0 || s.bmp == 0 {
+		ow.logFail(fmt.Errorf("border bitmap failed"))
+		ow.releaseSurface(i)
+		return false
+	}
+	s.old, _, _ = procSelectObject.Call(s.dc, s.bmp)
+	rc := RECT{Right: w, Bottom: h}
+	procFillRect.Call(s.dc, uintptr(unsafe.Pointer(&rc)), ow.brush)
+	s.w, s.h = w, h
+	return true
+}
+
+func (ow *OverlayWindow) releaseSurface(i int) {
+	s := &ow.surf[i]
+	if s.dc == 0 {
+		return
+	}
+	if s.old != 0 {
+		procSelectObject.Call(s.dc, s.old)
+	}
+	if s.bmp != 0 {
+		procDeleteObject.Call(s.bmp)
+	}
+	procDeleteDC.Call(s.dc)
+	*s = barSurface{}
+}
+
+func (ow *OverlayWindow) presentBar(hwnd, src uintptr, x, y, w, h int32) bool {
+	dst := POINT{X: x, Y: y}
+	size := SIZE{CX: w, CY: h}
+	srcPt := POINT{}
+	blend := BLENDFUNCTION{
+		BlendOp:             AC_SRC_OVER,
+		SourceConstantAlpha: 255,
+	}
+	ret, _, err := procUpdateLayeredWindow.Call(
+		hwnd,
+		0,
+		uintptr(unsafe.Pointer(&dst)),
+		uintptr(unsafe.Pointer(&size)),
+		src,
+		uintptr(unsafe.Pointer(&srcPt)),
+		0,
+		uintptr(unsafe.Pointer(&blend)),
+		ULW_ALPHA,
+	)
+	if ret == 0 {
+		ow.logFail(err)
+		return false
+	}
+	return true
+}
+
+func (ow *OverlayWindow) logFail(err error) {
+	if ow.failLogged {
+		return
+	}
+	ow.failLogged = true
+	fmt.Printf("border update failed: %v\n", err)
 }
 
 func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
@@ -317,81 +477,35 @@ func wndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 
 	switch msg {
 	case WM_ERASEBKGND:
-		// Return 1 to indicate we handled the erase (prevents flickering)
 		return 1
 
 	case WM_PAINT:
-		// Get window DC
-		hdc, _, _ := procGetDC.Call(hwnd)
+		var ps PAINTSTRUCT
+		procBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		procEndPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+		return 0
 
-		// Get window dimensions
-		var rect RECT
-		user32.NewProc("GetClientRect").Call(hwnd, uintptr(unsafe.Pointer(&rect)))
+	case WM_UPDATE_RECT:
+		atomic.StoreInt32(&ow.paintPending, 0)
+		ow.paintNow()
+		return 0
 
-		// Create off-screen DC for double buffering
-		memDC, _, _ := procCreateCompatibleDC.Call(hdc)
-		memBitmap, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(rect.Right), uintptr(rect.Bottom))
-		oldBitmap, _, _ := procSelectObject.Call(memDC, memBitmap)
-
-		// Clear the off-screen buffer with BLACKNESS (transparent on layered window)
-		procPatBlt.Call(memDC, 0, 0, uintptr(rect.Right), uintptr(rect.Bottom), BLACKNESS)
-
-		if !ow.lastRect.Empty() || ow.isDragging {
-			// Create a red pen for the rectangle border
-			pen, _, _ := procCreatePen.Call(PS_SOLID, 3, 0x0000FF) // Red color (BGR format)
-			oldPen, _, _ := procSelectObject.Call(memDC, pen)
-
-			// Select null brush (transparent fill)
-			oldBrush, _, _ := procSelectObject.Call(memDC, NULL_BRUSH)
-
-			// Draw the last selected rectangle
-			// Convert screen coordinates to window client coordinates
-			if !ow.lastRect.Empty() {
-				clientMinX := int32(ow.lastRect.Min.X) - ow.virtualX
-				clientMinY := int32(ow.lastRect.Min.Y) - ow.virtualY
-				clientMaxX := int32(ow.lastRect.Max.X) - ow.virtualX
-				clientMaxY := int32(ow.lastRect.Max.Y) - ow.virtualY
-
-				procRectangle.Call(memDC,
-					uintptr(clientMinX),
-					uintptr(clientMinY),
-					uintptr(clientMaxX),
-					uintptr(clientMaxY))
+	case WM_TIMER:
+		if wParam == overlayTimerID && hwnd == ow.hwnd {
+			if atomic.LoadInt32(&ow.dragging) != 0 || atomic.LoadInt32(&ow.dragCommit) != 0 {
+				ow.paintNow()
 			}
-
-			// If currently dragging, draw the current selection
-			// Convert screen coordinates to window client coordinates
-			if ow.isDragging {
-				minX := min(ow.startX, ow.endX) - ow.virtualX
-				maxX := max(ow.startX, ow.endX) - ow.virtualX
-				minY := min(ow.startY, ow.endY) - ow.virtualY
-				maxY := max(ow.startY, ow.endY) - ow.virtualY
-
-				procRectangle.Call(memDC, uintptr(minX), uintptr(minY), uintptr(maxX), uintptr(maxY))
-			}
-
-			// Cleanup pen and brush
-			procSelectObject.Call(memDC, oldPen)
-			procSelectObject.Call(memDC, oldBrush)
-			procDeleteObject.Call(pen)
 		}
-
-		// Copy the off-screen buffer to the screen in one operation (eliminates flickering)
-		procBitBlt.Call(hdc, 0, 0, uintptr(rect.Right), uintptr(rect.Bottom), memDC, 0, 0, SRCCOPY)
-
-		// Cleanup off-screen DC and bitmap
-		procSelectObject.Call(memDC, oldBitmap)
-		procDeleteObject.Call(memBitmap)
-		procDeleteDC.Call(memDC)
-
-		procReleaseDC.Call(hwnd, hdc)
-		// Validate the window to prevent further WM_PAINT messages
-		user32.NewProc("ValidateRect").Call(hwnd, 0)
 		return 0
 
 	case WM_CLOSE, WM_DESTROY:
+		procKillTimer.Call(hwnd, overlayTimerID)
 		if ow.mouseHook != 0 {
 			procUnhookWindowsHookEx.Call(ow.mouseHook)
+			ow.mouseHook = 0
+		}
+		for i := range ow.surf {
+			ow.releaseSurface(i)
 		}
 		procPostQuitMessage.Call(0)
 		return 0
@@ -412,37 +526,45 @@ func (ow *OverlayWindow) SetApp(app *CaptureApp) {
 	ow.app = app
 }
 
-// SetVisible hides or shows the selection overlay.
-// PrintScreen captures layered windows, so the border is hidden during that capture.
+// SetVisible hides or shows the selection border.
+// PrintScreen captures topmost windows, so the border is hidden during that capture.
 func (ow *OverlayWindow) SetVisible(visible bool) {
 	if ow == nil || ow.hwnd == 0 {
 		return
 	}
 	if visible {
-		procShowWindow.Call(ow.hwnd, SW_SHOWNA)
-		procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+		atomic.StoreInt32(&ow.hidden, 0)
+		if ow.hasRect {
+			x, y, w, h := ow.winX, ow.winY, ow.winW, ow.winH
+			for i := range ow.barOn {
+				ow.barOn[i] = false
+			}
+			ow.winW = -1
+			ow.applyRect(image.Rect(int(x), int(y), int(x+w), int(y+h)))
+		}
 		return
 	}
-	procShowWindow.Call(ow.hwnd, SW_HIDE)
+	atomic.StoreInt32(&ow.hidden, 1)
+	ow.hideBars(false)
 }
 
-func min(a, b int32) int32 {
-	if a < b {
-		return a
+func (ow *OverlayWindow) hideBars(drop bool) {
+	for i, hwnd := range ow.bars {
+		if hwnd != 0 {
+			procShowWindow.Call(hwnd, SW_HIDE)
+		}
+		if drop {
+			ow.barOn[i] = false
+		}
 	}
-	return b
 }
 
-func max(a, b int32) int32 {
-	if a > b {
-		return a
+func screenRect(x1, y1, x2, y2 int32) image.Rectangle {
+	if x1 > x2 {
+		x1, x2 = x2, x1
 	}
-	return b
-}
-
-func abs(a int32) int32 {
-	if a < 0 {
-		return -a
+	if y1 > y2 {
+		y1, y2 = y2, y1
 	}
-	return a
+	return image.Rect(int(x1), int(y1), int(x2), int(y2))
 }

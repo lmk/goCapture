@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -277,6 +278,9 @@ func isCtrlPressed() bool {
 }
 
 func (app *CaptureApp) startKeyboardHook() error {
+	// Same constraint as the mouse hook: this OS thread must keep pumping messages.
+	runtime.LockOSThread()
+
 	// The hook returns immediately, so Space auto-repeat would queue extra captures.
 	spaceHeld := false
 	printScreenHeld := false
