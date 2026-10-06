@@ -229,6 +229,7 @@ func (ow *OverlayWindow) installMouseHook() error {
 	mouseCallback := func(nCode int, wParam uintptr, lParam uintptr) uintptr {
 		if nCode >= 0 && ow != nil {
 			mouseStruct := (*MSLLHOOKSTRUCT)(unsafe.Pointer(lParam))
+			block := false
 
 			switch wParam {
 			case WM_LBUTTONDOWN:
@@ -240,15 +241,19 @@ func (ow *OverlayWindow) installMouseHook() error {
 					ow.endY = ow.startY
 					ow.isDragging = true
 					procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+					block = true
 				}
 
 			case WM_MOUSEMOVE:
-				if ow.isDragging && isCtrlPressed() {
-					// Only update if position changed significantly (reduce redraws)
-					if abs(ow.endX-mouseStruct.Pt.X) > 5 || abs(ow.endY-mouseStruct.Pt.Y) > 5 {
-						ow.endX = mouseStruct.Pt.X
-						ow.endY = mouseStruct.Pt.Y
-						procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+				if ow.isDragging {
+					block = true
+					if isCtrlPressed() {
+						// Only update if position changed significantly (reduce redraws)
+						if abs(ow.endX-mouseStruct.Pt.X) > 5 || abs(ow.endY-mouseStruct.Pt.Y) > 5 {
+							ow.endX = mouseStruct.Pt.X
+							ow.endY = mouseStruct.Pt.Y
+							procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+						}
 					}
 				}
 
@@ -273,7 +278,13 @@ func (ow *OverlayWindow) installMouseHook() error {
 					}
 
 					procRedrawWindow.Call(ow.hwnd, 0, 0, RDW_INVALIDATE|RDW_ERASE)
+					block = true
 				}
+			}
+
+			if block {
+				// Swallow the event so the underlying app does not receive it.
+				return 1
 			}
 		}
 
